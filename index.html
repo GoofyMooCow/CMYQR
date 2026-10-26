@@ -1,0 +1,997 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>CMYQR Scanner</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one phone-width column. Dark viewfinder on top, controls under it, result card replaces the hint.
+   Colour: cool paper and ink-black neutrals; the three process inks appear only as small registration-style marks. */
+:root {
+  --bg: #F1F4F6; --surface: #FFFFFF; --ink: #10161B; --muted: #55626B; --line: #D5DBE0;
+  --btn-bg: #10161B; --btn-fg: #F1F4F6; --focus: #0086C2; --warn: #9A4B00; --warn-bg: #FFF1E0;
+  --ink-c: #00AEEF; --ink-m: #EC008C; --ink-y: #FFD400;
+  --stage: #0B0F12; --stage-fg: #E8EDF0;
+  --font-ui: "Familjen Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-data: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0E1215; --surface: #161C21; --ink: #EDF1F3; --muted: #94A2AB; --line: #27313A;
+    --btn-bg: #EDF1F3; --btn-fg: #0E1215; --focus: #4CC3F5; --warn: #FFB566; --warn-bg: #2A1D0D;
+    --stage: #070A0C; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0E1215; --surface: #161C21; --ink: #EDF1F3; --muted: #94A2AB; --line: #27313A;
+  --btn-bg: #EDF1F3; --btn-fg: #0E1215; --focus: #4CC3F5; --warn: #FFB566; --warn-bg: #2A1D0D;
+  --stage: #070A0C; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--ink); font-family: var(--font-ui); font-size: 16px; line-height: 1.45;
+  padding-inline: max(16px, env(safe-area-inset-left, 0px)) max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 18px 40px;
+}
+.app { max-width: 520px; margin: 0 auto; display: grid; gap: 14px; }
+header { display: flex; align-items: center; gap: 12px; }
+.mark { position: relative; flex: none; width: 36px; height: 36px; background: #fff; border-radius: 6px; isolation: isolate; border: 1px solid var(--line); }
+.mark i { position: absolute; width: 17px; height: 17px; mix-blend-mode: multiply; }
+.mark i:nth-child(1) { background: var(--ink-c); left: 5px; top: 5px; }
+.mark i:nth-child(2) { background: var(--ink-m); left: 12px; top: 5px; }
+.mark i:nth-child(3) { background: var(--ink-y); left: 8.5px; top: 12px; }
+h1 { font-size: 21px; line-height: 1.1; font-weight: 700; letter-spacing: -0.01em; margin: 0; }
+.sub { margin: 2px 0 0; color: var(--muted); font-size: 13.5px; }
+
+.stage { position: relative; background: var(--stage); border-radius: 8px; overflow: hidden; aspect-ratio: 1 / 1; max-height: 62vh; width: 100%;
+  display: grid; place-items: center; color: var(--stage-fg); }
+.stage video, .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.corner { position: absolute; width: 34px; height: 34px; border: 4px solid; pointer-events: none; }
+.corner.tl { top: 14px; left: 14px; border-color: var(--ink-c) transparent transparent var(--ink-c); }
+.corner.tr { top: 14px; right: 14px; border-color: var(--ink-m) var(--ink-m) transparent transparent; }
+.corner.bl { bottom: 14px; left: 14px; border-color: transparent transparent var(--ink-y) var(--ink-y); }
+.corner.br { bottom: 14px; right: 14px; border-color: transparent #E8EDF0 #E8EDF0 transparent; }
+.hint { position: relative; z-index: 1; text-align: center; padding: 28px; max-width: 320px; }
+.hint strong { display: block; font-size: 19px; font-weight: 600; margin-bottom: 6px; }
+.hint span { color: #9FADB6; font-size: 14.5px; }
+
+.status { min-height: 1.5em; font-size: 14.5px; color: var(--muted); display: flex; gap: 8px; align-items: center; }
+.status.busy::before { content: ""; width: 12px; height: 12px; border: 2px solid var(--line); border-top-color: var(--ink); border-radius: 50%; animation: spin .8s linear infinite; flex: none; }
+.status.err { color: var(--warn); }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .status.busy::before { animation: none; } }
+
+.actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.btn { appearance: none; font: inherit; font-weight: 600; font-size: 15.5px; min-height: 48px; padding: 10px 14px; border-radius: 8px; border: 1.5px solid var(--ink);
+  background: transparent; color: var(--ink); display: inline-flex; align-items: center; justify-content: center; text-align: center; cursor: pointer; text-decoration: none; }
+.btn.primary { background: var(--btn-bg); color: var(--btn-fg); grid-column: 1 / -1; min-height: 54px; font-size: 17px; }
+.btn:active { transform: translateY(1px); }
+.btn:focus-visible, .file:focus-visible + .btn { outline: 3px solid var(--focus); outline-offset: 2px; }
+.file { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; clip-path: inset(50%); }
+
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 16px; display: grid; gap: 12px; min-width: 0; }
+.card h2 { margin: 0; font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600; }
+.out { font-family: var(--font-data); font-size: 14.5px; line-height: 1.5; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 12px;
+  margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 38vh; overflow: auto; min-width: 0; user-select: text; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; }
+.row .btn { flex: 1 1 140px; }
+dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; font-size: 14.5px; }
+dt { color: var(--muted); }
+dd { margin: 0; font-family: var(--font-data); font-size: 13.5px; min-width: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.dots { display: inline-flex; gap: 10px; flex-wrap: wrap; }
+.dots b { display: inline-flex; align-items: center; gap: 5px; font-weight: 500; }
+.dots b::before { content: ""; width: 10px; height: 10px; background: var(--c); border-radius: 2px; }
+.sym { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; }
+.sym canvas { image-rendering: pixelated; background: #fff; border: 1px solid var(--line); border-radius: 4px; max-width: 100%; }
+.sym p { margin: 0; color: var(--muted); font-size: 13.5px; flex: 1 1 180px; }
+.notice { background: var(--warn-bg); color: var(--warn); border-radius: 6px; padding: 10px 12px; font-size: 14px; }
+.parts { display: flex; gap: 6px; flex-wrap: wrap; }
+.parts i { width: 26px; height: 26px; border-radius: 4px; border: 1.5px solid var(--line); display: grid; place-items: center; font-style: normal; font-size: 12px; font-family: var(--font-data); color: var(--muted); }
+.parts i.have { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+.sample { display: flex; gap: 14px; align-items: center; }
+.sample img { width: 96px; height: 96px; image-rendering: pixelated; border: 1px solid var(--line); border-radius: 4px; background: #fff; flex: none; }
+.sample p { margin: 0 0 8px; color: var(--muted); font-size: 14px; }
+.sample .btn { min-height: 42px; font-size: 14.5px; }
+.foot { color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+</style>
+<style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0}[hidden]{display:none!important}</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="mark" aria-hidden="true"><i></i><i></i><i></i></div>
+    <div>
+      <h1>CMYQR Scanner</h1>
+      <p class="sub">Reads three-ink QR symbols in cyan, magenta and yellow</p>
+    </div>
+  </header>
+
+  <section class="stage" id="stage" aria-label="Viewfinder">
+    <video id="video" playsinline muted hidden></video>
+    <canvas id="photo" hidden></canvas>
+    <canvas id="overlay" hidden></canvas>
+    <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+    <div class="hint" id="hint"><strong>Fill the frame with the symbol</strong><span>Keep it flat, evenly lit and in colour. Take a photo, or start the live camera.</span></div>
+  </section>
+
+  <div class="status" id="status" role="status" aria-live="polite">Ready to scan.</div>
+
+  <div class="actions">
+    <input class="file" id="fileCam" type="file" accept="image/*" capture="environment">
+    <label class="btn primary" for="fileCam">Take photo</label>
+    <input class="file" id="filePick" type="file" accept="image/*">
+    <label class="btn" for="filePick">Choose image</label>
+    <button class="btn" id="liveBtn" type="button">Live camera</button>
+  </div>
+
+  <section class="card" id="parts" hidden>
+    <h2>Structured append</h2>
+    <div class="parts" id="partsRow"></div>
+    <div id="partsNote" style="font-size:14.5px"></div>
+    <button class="btn" id="partsReset" type="button">Start over</button>
+  </section>
+
+  <section class="card" id="result" hidden>
+    <h2>Decoded</h2>
+    <pre class="out" id="outText" tabindex="0"></pre>
+    <div id="binNote" class="notice" hidden>This symbol holds binary data, shown as hex. Bytes: <span id="binLen"></span></div>
+    <div class="row">
+      <button class="btn" id="copyBtn" type="button">Copy</button>
+      <a class="btn" id="openLink" href="#" target="_blank" rel="noopener noreferrer" hidden>Open link</a>
+    </div>
+    <dl id="meta"></dl>
+    <div class="sym"><canvas id="symCanvas" width="10" height="10" aria-label="Recovered symbol"></canvas>
+      <p>The symbol as the scanner recovered it, after correction. Each module is one bit from each of the three inks.</p></div>
+  </section>
+
+  <section class="card sample" id="sampleCard">
+    <img id="sampleImg" alt="Sample CMYQR symbol" src="data:image/png;base64,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">
+    <div>
+      <p>No symbol to hand? Decode this one, or show it on another screen and scan it.</p>
+      <button class="btn" id="sampleBtn" type="button">Decode sample</button>
+    </div>
+  </section>
+
+  <p class="foot">Decoding runs in this page; images never leave your device. Format: versions 1 to 40, error correction L, M, Q and H, numeric, alphanumeric, byte, kanji, ECI, FNC1 and structured append.</p>
+</div>
+
+<script>
+/* CMYQR decoder core (JavaScript port of cmyqr_core.py + cmyqr_decode.py).
+   Input: RGBA image data {data,width,height}.  Output: decoded symbol. */
+const CMYQR = (() => {
+'use strict';
+
+const ECC_PER_BLOCK = [[-1, 7, 10, 15, 20, 26, 18, 20, 24, 30, 18, 20, 24, 26, 30, 22, 24, 28, 30, 28, 28, 28, 28, 30, 30, 26, 28, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30], [-1, 10, 16, 26, 18, 24, 16, 18, 22, 22, 26, 30, 22, 22, 24, 24, 28, 28, 26, 26, 26, 26, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28], [-1, 13, 22, 18, 26, 18, 24, 18, 22, 20, 24, 28, 26, 24, 20, 30, 24, 28, 28, 26, 30, 28, 30, 30, 30, 30, 28, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30], [-1, 17, 28, 22, 16, 22, 28, 26, 26, 24, 28, 24, 28, 22, 24, 24, 30, 28, 28, 26, 28, 30, 24, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30]];
+const NUM_BLOCKS = [[-1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 4, 4, 4, 4, 4, 6, 6, 6, 6, 7, 8, 8, 9, 9, 10, 12, 12, 12, 13, 14, 15, 16, 17, 18, 19, 19, 20, 21, 22, 24, 25], [-1, 1, 1, 1, 2, 2, 4, 4, 4, 5, 5, 5, 8, 9, 9, 10, 10, 11, 13, 14, 16, 17, 17, 18, 20, 21, 23, 25, 26, 28, 29, 31, 33, 35, 37, 38, 40, 43, 45, 47, 49], [-1, 1, 1, 2, 2, 4, 4, 6, 6, 8, 8, 8, 10, 12, 16, 12, 17, 16, 18, 21, 20, 23, 23, 25, 27, 29, 34, 34, 35, 38, 40, 43, 45, 48, 51, 53, 56, 59, 62, 65, 68], [-1, 1, 1, 2, 4, 4, 4, 5, 6, 8, 8, 11, 11, 16, 16, 18, 16, 19, 21, 25, 25, 25, 34, 30, 32, 35, 37, 40, 42, 45, 48, 51, 54, 57, 60, 63, 66, 70, 74, 77, 81]];
+
+const FORMAT_XOR = 0x40B7, FORMAT_GEN = 0x537, VERSION_GEN = 0x1F25;
+const ECL_NAMES = 'LMQH';
+const ECL_FORMAT_BITS = [1, 0, 3, 2];
+const MODE = { TERM: 0, NUM: 1, ALNUM: 2, SA: 3, BYTE: 4, FNC1A: 5, ECI: 7, KANJI: 8, FNC1B: 9 };
+const CC_BITS = { 1: [10, 12, 14], 2: [9, 11, 13], 4: [8, 16, 16], 8: [8, 10, 12] };
+const ALNUM = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:';
+const ECI_LABELS = {
+  1: 'iso-8859-1', 3: 'iso-8859-1', 4: 'iso-8859-2', 5: 'iso-8859-3', 6: 'iso-8859-4', 7: 'iso-8859-5',
+  8: 'iso-8859-6', 9: 'iso-8859-7', 10: 'iso-8859-8', 11: 'windows-1254', 12: 'iso-8859-10', 13: 'windows-874',
+  15: 'iso-8859-13', 16: 'iso-8859-14', 17: 'iso-8859-15', 18: 'iso-8859-16', 20: 'shift_jis',
+  21: 'windows-1250', 22: 'windows-1251', 23: 'windows-1252', 24: 'windows-1256', 25: 'utf-16be',
+  26: 'utf-8', 27: 'windows-1252', 28: 'big5', 29: 'gbk', 30: 'euc-kr', 31: 'gbk', 32: 'gb18030',
+  33: 'utf-16le', 170: 'windows-1252',
+};
+
+class DecodeError extends Error {}
+
+const sizeOf = v => 17 + 4 * v;
+const popcount = x => { let n = 0; while (x) { n += x & 1; x >>>= 1; } return n; };
+
+// ---------------------------------------------------------------- GF(256) / Reed-Solomon
+const EXP = new Uint8Array(512), LOG = new Uint8Array(256);
+{ let x = 1; for (let i = 0; i < 255; i++) { EXP[i] = x; LOG[x] = i; x <<= 1; if (x & 0x100) x ^= 0x11D; }
+  for (let i = 255; i < 512; i++) EXP[i] = EXP[i - 255]; }
+const gfMul = (a, b) => (a === 0 || b === 0) ? 0 : EXP[LOG[a] + LOG[b]];
+const gfDiv = (a, b) => a === 0 ? 0 : EXP[LOG[a] + 255 - LOG[b]];
+const polyEvalHi = (poly, x) => { let y = 0; for (let i = 0; i < poly.length; i++) y = gfMul(y, x) ^ poly[i]; return y; };
+
+function rsDecodeBlock(block, nsym) {
+  const msg = Array.from(block), n = msg.length;
+  const synd = new Array(nsym); let any = false;
+  for (let j = 0; j < nsym; j++) { synd[j] = polyEvalHi(msg, EXP[j]); if (synd[j]) any = true; }
+  if (!any) return [msg, 0];
+  let C = [1], B = [1], L = 0, m = 1, b = 1;
+  for (let i = 0; i < nsym; i++) {
+    let d = synd[i];
+    for (let k = 1; k <= L; k++) if (k < C.length) d ^= gfMul(C[k], synd[i - k]);
+    if (d === 0) { m++; continue; }
+    const coef = gfDiv(d, b), T = C.slice();
+    while (C.length < B.length + m) C.push(0);
+    for (let k = 0; k < B.length; k++) C[k + m] ^= gfMul(coef, B[k]);
+    if (2 * L <= i) { L = i + 1 - L; B = T; b = d; m = 1; } else m++;
+  }
+  while (C.length > 1 && C[C.length - 1] === 0) C.pop();
+  if (L > (nsym >> 1) || C.length - 1 !== L) throw new DecodeError('too many errors in Reed-Solomon block');
+  const errPos = [];
+  for (let p = 0; p < n; p++) {
+    const x = EXP[(255 - p) % 255]; let y = 0, xp = 1;
+    for (let k = 0; k < C.length; k++) { y ^= gfMul(C[k], xp); xp = gfMul(xp, x); }
+    if (y === 0) errPos.push(p);
+  }
+  if (errPos.length !== L) throw new DecodeError('Reed-Solomon error locator inconsistent');
+  const omega = new Array(nsym).fill(0);
+  for (let i = 0; i < nsym; i++) {
+    let acc = 0;
+    for (let k = 0; k <= Math.min(i, C.length - 1); k++) acc ^= gfMul(C[k], synd[i - k]);
+    omega[i] = acc;
+  }
+  for (const p of errPos) {
+    const xinv = EXP[(255 - p) % 255], X = EXP[p];
+    let num = 0, xp = 1;
+    for (let k = 0; k < omega.length; k++) { num ^= gfMul(omega[k], xp); xp = gfMul(xp, xinv); }
+    let den = 0;
+    for (let k = 1; k < C.length; k += 2) {
+      let q = 1; for (let t = 0; t < k - 1; t++) q = gfMul(q, xinv);
+      den ^= gfMul(C[k], q);
+    }
+    if (den === 0) throw new DecodeError('Reed-Solomon derivative zero');
+    msg[n - 1 - p] ^= gfMul(X, gfDiv(num, den));
+  }
+  for (let j = 0; j < nsym; j++) if (polyEvalHi(msg, EXP[j])) throw new DecodeError('Reed-Solomon correction failed verification');
+  return [msg, L];
+}
+
+function numRawDataModules(ver) {
+  let r = (16 * ver + 128) * ver + 64;
+  if (ver >= 2) { const n = Math.floor(ver / 7) + 2; r -= (25 * n - 10) * n - 55; if (ver >= 7) r -= 36; }
+  return r;
+}
+const numRawCodewords = ver => numRawDataModules(ver) >> 3;
+
+function deinterleaveAndCorrect(ver, ecl, raw) {
+  const nb = NUM_BLOCKS[ecl][ver], eccLen = ECC_PER_BLOCK[ecl][ver], total = numRawCodewords(ver);
+  const nShort = nb - (total % nb), shortLen = Math.floor(total / nb), ds = shortLen - eccLen;
+  const dataB = [], eccB = [];
+  for (let j = 0; j < nb; j++) { dataB.push([]); eccB.push([]); }
+  let pos = 0;
+  for (let i = 0; i <= shortLen; i++) for (let j = 0; j < nb; j++) {
+    if (i === ds && j < nShort) continue;
+    (i <= ds ? dataB : eccB)[j].push(raw[pos++]);
+  }
+  const out = []; let corrected = 0;
+  for (let j = 0; j < nb; j++) {
+    const [fixed, nerr] = rsDecodeBlock(dataB[j].concat(eccB[j]), eccLen);
+    corrected += nerr;
+    for (let k = 0; k < dataB[j].length; k++) out.push(fixed[k]);
+  }
+  return [Uint8Array.from(out), corrected];
+}
+const numDataCodewords = (ver, ecl) => numRawCodewords(ver) - ECC_PER_BLOCK[ecl][ver] * NUM_BLOCKS[ecl][ver];
+
+// ---------------------------------------------------------------- format / version info
+function formatWord(ecl, mask, xor = FORMAT_XOR) {
+  const d = (ECL_FORMAT_BITS[ecl] << 3) | mask;
+  let rem = d;
+  for (let i = 0; i < 10; i++) rem = (rem << 1) ^ ((rem >> 9) * FORMAT_GEN);
+  return ((d << 10) | rem) ^ xor;
+}
+const fmtCache = new Map();
+function formatPositions(size) {
+  if (fmtCache.has(size)) return fmtCache.get(size);
+  const c1 = [], c2 = [];
+  for (let i = 0; i < 15; i++) {
+    if (i < 6) c1.push([8, i]); else if (i === 6) c1.push([8, 7]); else if (i === 7) c1.push([8, 8]);
+    else if (i === 8) c1.push([7, 8]); else c1.push([14 - i, 8]);
+  }
+  for (let i = 0; i < 15; i++) c2.push(i < 8 ? [size - 1 - i, 8] : [8, size - 15 + i]);
+  const r = [c1, c2]; fmtCache.set(size, r); return r;
+}
+function versionWord(ver) {
+  let rem = ver;
+  for (let i = 0; i < 12; i++) rem = (rem << 1) ^ ((rem >> 11) * VERSION_GEN);
+  return (ver << 12) | rem;
+}
+function readFormatCopies(mat, size) {
+  const [p1, p2] = formatPositions(size); let w1 = 0, w2 = 0;
+  for (let i = 0; i < 15; i++) { w1 |= mat[p1[i][1] * size + p1[i][0]] << i; w2 |= mat[p2[i][1] * size + p2[i][0]] << i; }
+  return [w1, w2];
+}
+
+// ---------------------------------------------------------------- layout
+function alignmentPositions(ver) {
+  if (ver === 1) return [];
+  const n = Math.floor(ver / 7) + 2, size = sizeOf(ver);
+  const step = ver === 32 ? 26 : Math.floor((ver * 4 + n * 2 + 1) / (n * 2 - 2)) * 2;
+  const pos = []; for (let i = 0; i < n - 1; i++) pos.push(size - 7 - i * step);
+  pos.push(6); pos.reverse(); return pos;
+}
+const tmplCache = new Map();
+function template(ver) {
+  if (tmplCache.has(ver)) return tmplCache.get(ver);
+  const size = sizeOf(ver), vals = new Uint8Array(size * size), func = new Uint8Array(size * size);
+  const setf = (x, y, dark) => { vals[y * size + x] = dark ? 1 : 0; func[y * size + x] = 1; };
+  for (let i = 0; i < size; i++) { setf(6, i, i % 2 === 0); setf(i, 6, i % 2 === 0); }
+  const finder = (cx, cy) => {
+    for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) {
+      const x = cx + dx, y = cy + dy;
+      if (x >= 0 && x < size && y >= 0 && y < size) { const c = Math.max(Math.abs(dx), Math.abs(dy)); setf(x, y, c !== 2 && c !== 4); }
+    }
+  };
+  finder(3, 3); finder(size - 4, 3); finder(3, size - 4);
+  const pos = alignmentPositions(ver), n = pos.length;
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+    if ((i === 0 && j === 0) || (i === 0 && j === n - 1) || (i === n - 1 && j === 0)) continue;
+    for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) setf(pos[i] + dx, pos[j] + dy, Math.max(Math.abs(dx), Math.abs(dy)) !== 1);
+  }
+  const [p1, p2] = formatPositions(size);
+  for (const [x, y] of p1.concat(p2)) { func[y * size + x] = 1; vals[y * size + x] = 0; }
+  setf(8, size - 8, true);
+  if (ver >= 7) {
+    const vw = versionWord(ver);
+    for (let i = 0; i < 18; i++) {
+      const bit = (vw >> i) & 1;
+      setf(size - 11 + (i % 3), Math.floor(i / 3), bit); setf(Math.floor(i / 3), size - 11 + (i % 3), bit);
+    }
+  }
+  const t = { size, vals, func }; tmplCache.set(ver, t); return t;
+}
+const dposCache = new Map();
+function dataPositions(ver) {
+  if (dposCache.has(ver)) return dposCache.get(ver);
+  const { size, func } = template(ver), idx = [];
+  for (let right = size - 1; right > 0; right -= 2) {
+    const r = right <= 6 ? right - 1 : right, upward = ((r + 1) & 2) === 0;
+    for (let vert = 0; vert < size; vert++) {
+      const y = upward ? size - 1 - vert : vert;
+      for (let j = 0; j < 2; j++) { const x = r - j; if (!func[y * size + x]) idx.push(y * size + x); }
+    }
+  }
+  const a = Int32Array.from(idx); dposCache.set(ver, a); return a;
+}
+function maskBit(m, x, y) {
+  switch (m) {
+    case 0: return (x + y) % 2 === 0;
+    case 1: return y % 2 === 0;
+    case 2: return x % 3 === 0;
+    case 3: return (x + y) % 3 === 0;
+    case 4: return (Math.floor(x / 3) + Math.floor(y / 2)) % 2 === 0;
+    case 5: return (x * y) % 2 + (x * y) % 3 === 0;
+    case 6: return ((x * y) % 2 + (x * y) % 3) % 2 === 0;
+    default: return ((x + y) % 2 + (x * y) % 3) % 2 === 0;
+  }
+}
+function readPlaneCodewords(mat, ver, mask) {
+  const size = sizeOf(ver), pos = dataPositions(ver), nbytes = numRawCodewords(ver), out = new Uint8Array(nbytes);
+  for (let k = 0; k < nbytes * 8; k++) {
+    const idx = pos[k], y = (idx / size) | 0, x = idx - y * size;
+    const bit = mat[idx] ^ (maskBit(mask, x, y) ? 1 : 0);
+    out[k >> 3] |= bit << (7 - (k & 7));
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------- stream parsing
+class Bits {
+  constructor(bytes) { this.b = bytes; this.pos = 0; this.n = bytes.length * 8; }
+  left() { return this.n - this.pos; }
+  read(k) {
+    if (k > this.left()) throw new DecodeError('data stream ended unexpectedly');
+    let v = 0;
+    for (let i = 0; i < k; i++, this.pos++) v = (v * 2) + ((this.b[this.pos >> 3] >> (7 - (this.pos & 7))) & 1);
+    return v;
+  }
+}
+const ccBits = (mode, ver) => CC_BITS[mode][ver <= 9 ? 0 : ver <= 26 ? 1 : 2];
+const ascii = s => Uint8Array.from(s, c => c.charCodeAt(0));
+
+function parseStream(data, ver) {
+  const br = new Bits(data), ps = { pieces: [], raw: [], modes: [], eci: [], sa: null, fnc1: null };
+  let codec = null, fnc1 = false;
+  const pushBytes = b => { ps.pieces.push({ kind: 'b', bytes: b, codec }); for (const v of b) ps.raw.push(v); };
+  while (br.left() >= 4) {
+    const mode = br.read(4);
+    if (mode === MODE.TERM) break;
+    ps.modes.push(mode);
+    if (mode === MODE.ECI) {
+      const f = br.read(8); let d;
+      if ((f & 0x80) === 0) d = f; else if ((f & 0xC0) === 0x80) d = ((f & 0x3F) << 8) | br.read(8);
+      else if ((f & 0xE0) === 0xC0) d = ((f & 0x1F) << 16) | br.read(16); else throw new DecodeError('bad ECI designator');
+      ps.eci.push(d); codec = ECI_LABELS[d] || null;
+    } else if (mode === MODE.SA) {
+      const i = br.read(4), t = br.read(4) + 1, p = br.read(8); ps.sa = [i, t, p];
+    } else if (mode === MODE.FNC1A) { fnc1 = true; ps.fnc1 = 'first'; }
+    else if (mode === MODE.FNC1B) { fnc1 = true; ps.fnc1 = ['second', br.read(8)]; }
+    else if (CC_BITS[mode]) {
+      let n = br.read(ccBits(mode, ver));
+      if (mode === MODE.NUM) {
+        let s = '';
+        while (n >= 3) { const v = br.read(10); if (v > 999) throw new DecodeError('bad numeric group'); s += String(v).padStart(3, '0'); n -= 3; }
+        if (n === 2) { const v = br.read(7); if (v > 99) throw new DecodeError('bad numeric group'); s += String(v).padStart(2, '0'); }
+        else if (n === 1) { const v = br.read(4); if (v > 9) throw new DecodeError('bad numeric digit'); s += String(v); }
+        pushBytes(ascii(s));
+      } else if (mode === MODE.ALNUM) {
+        let s = '';
+        while (n >= 2) { const v = br.read(11); if (v >= 2025) throw new DecodeError('bad alphanumeric pair'); s += ALNUM[Math.floor(v / 45)] + ALNUM[v % 45]; n -= 2; }
+        if (n === 1) { const v = br.read(6); if (v >= 45) throw new DecodeError('bad alphanumeric char'); s += ALNUM[v]; }
+        if (fnc1) {
+          let o = '';
+          for (let i = 0; i < s.length; i++) {
+            if (s[i] === '%') { if (s[i + 1] === '%') { o += '%'; i++; } else o += '\x1d'; } else o += s[i];
+          }
+          s = o;
+        }
+        pushBytes(ascii(s));
+      } else if (mode === MODE.BYTE) {
+        const b = new Uint8Array(n); for (let i = 0; i < n; i++) b[i] = br.read(8); pushBytes(b);
+      } else {
+        const bs = [];
+        for (let i = 0; i < n; i++) {
+          let v = br.read(13); v = (Math.floor(v / 0xC0) << 8) | (v % 0xC0);
+          v += (v + 0x8140 <= 0x9FFC) ? 0x8140 : 0xC140; bs.push(v >> 8, v & 0xFF);
+        }
+        const b = Uint8Array.from(bs);
+        let text; try { text = new TextDecoder('shift_jis', { fatal: true }).decode(b); } catch (e) { throw new DecodeError('bad kanji data'); }
+        ps.pieces.push({ kind: 't', text }); for (const v of b) ps.raw.push(v);
+      }
+    } else throw new DecodeError('unknown mode indicator ' + mode);
+  }
+  ps.raw = Uint8Array.from(ps.raw);
+  return ps;
+}
+function decodeBytes(bytes, label) {
+  const tries = label ? [[label, false]] : [['utf-8', true], ['shift_jis', true], ['iso-8859-1', false]];
+  for (const [l, fatal] of tries) {
+    try { return new TextDecoder(l, { fatal }).decode(bytes); } catch (e) { /* next */ }
+  }
+  let s = ''; for (const v of bytes) s += String.fromCharCode(v); return s;
+}
+function renderText(pieces) {
+  let out = '', buf = [], cur = null;
+  const flush = () => { if (buf.length) { out += decodeBytes(Uint8Array.from(buf), cur); buf = []; } };
+  for (const p of pieces) {
+    if (p.kind === 'b') { if (p.codec !== cur) { flush(); cur = p.codec; } for (const v of p.bytes) buf.push(v); }
+    else { flush(); out += p.text; }
+  }
+  flush(); return out;
+}
+
+// ---------------------------------------------------------------- plane decoding
+function formatCandidates(planes, size, blind) {
+  const words = planes.map(p => readFormatCopies(p, size)), n = planes.length;
+  const table = []; for (let e = 0; e < 4; e++) { table.push([]); for (let m = 0; m < 8; m++) table[e].push(formatWord(e, m)); }
+  const dist = words.map(([w1, w2]) => table.map(row => row.map(t => Math.min(popcount(w1 ^ t), popcount(w2 ^ t)))));
+  const eclCost = [0, 1, 2, 3].map(e => dist.reduce((s, d) => s + Math.min(...d[e]), 0));
+  const order = [0, 1, 2, 3].sort((a, b) => (eclCost[a] - eclCost[b]) || (b - a));
+  const ranked = (p, e) => [0, 1, 2, 3, 4, 5, 6, 7].sort((a, b) => dist[p][e][a] - dist[p][e][b]);
+  const out = [], seen = new Set();
+  if (eclCost[order[0]] <= 3 * n) {
+    const use = eclCost[order[1]] > eclCost[order[0]] ? order.slice(0, 1) : order.slice(0, 2);
+    for (const e of use) {
+      const per = []; let total = 0;
+      for (let p = 0; p < n; p++) {
+        const rk = ranked(p, e), best = dist[p][e][rk[0]];
+        per.push(best <= 3 && dist[p][e][rk[1]] > best ? rk.slice(0, 1) : rk); total += best;
+      }
+      out.push([e, per, total]); seen.add(e + '|' + per.map(x => x.join('')).join(','));
+    }
+  }
+  if (blind) for (const e of [3, 2, 1, 0]) {
+    const per = []; for (let p = 0; p < n; p++) per.push(ranked(p, e));
+    const key = e + '|' + per.map(x => x.join('')).join(',');
+    if (!seen.has(key)) out.push([e, per, 0]);
+  }
+  return out;
+}
+function transpose(m, size) { const t = new Uint8Array(size * size); for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) t[x * size + y] = m[y * size + x]; return t; }
+
+function decodePlanes(planes, size, blind = false) {
+  const ver = (size - 17) / 4, errors = [];
+  for (const mirrored of [false, true]) {
+    const cur = mirrored ? planes.map(p => transpose(p, size)) : planes;
+    for (const [ecl, maskLists, fbe] of formatCandidates(cur, size, blind)) {
+      try {
+        const chunks = [], corr = [], used = [];
+        for (let p = 0; p < 3; p++) {
+          let ok = false, last = null;
+          for (const m of maskLists[p]) {
+            try {
+              const [data, nerr] = deinterleaveAndCorrect(ver, ecl, readPlaneCodewords(cur[p], ver, m));
+              chunks.push(data); corr.push(nerr); used.push(m); ok = true; break;
+            } catch (e) { if (!(e instanceof DecodeError)) throw e; last = e; }
+          }
+          if (!ok) throw last || new DecodeError('no mask candidate');
+        }
+        const all = new Uint8Array(chunks.reduce((s, c) => s + c.length, 0)); let o = 0;
+        for (const c of chunks) { all.set(c, o); o += c.length; }
+        const ps = parseStream(all, ver);
+        return { version: ver, size, ecl: ECL_NAMES[ecl], masks: used, corrected: corr, formatBitErrors: fbe, mirrored,
+          raw: ps.raw, text: renderText(ps.pieces), modes: ps.modes, eci: ps.eci, structuredAppend: ps.sa, fnc1: ps.fnc1,
+          pieces: ps.pieces, planes: cur };
+      } catch (e) { if (!(e instanceof DecodeError)) throw e; errors.push(e.message); }
+    }
+  }
+  throw new DecodeError([...new Set(errors)].join('; ') || 'decode failed');
+}
+
+// ---------------------------------------------------------------- image pipeline
+const INKS = { ideal: [[0, 255, 255], [255, 0, 255], [255, 255, 0]], print: [[0, 174, 239], [236, 0, 140], [255, 242, 0]] };
+const FLOOR = 0.1;
+
+function inv3(m) {
+  const [a, b, c, d, e, f, g, h, i] = [m[0][0], m[0][1], m[0][2], m[1][0], m[1][1], m[1][2], m[2][0], m[2][1], m[2][2]];
+  const A = e * i - f * h, B = -(d * i - f * g), C = d * h - e * g, det = a * A + b * B + c * C;
+  return [[A / det, -(b * i - c * h) / det, (b * f - c * e) / det],
+          [B / det, (a * i - c * g) / det, -(a * f - c * d) / det],
+          [C / det, -(a * h - b * g) / det, (a * e - b * d) / det]];
+}
+function whitePoint(img) {
+  const { data, width: w, height: h } = img, hist = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
+  const step = Math.max(1, Math.floor((w * h) / 120000)); let cnt = 0;
+  for (let p = 0; p < w * h; p += step) { const o = p * 4; hist[0][data[o]]++; hist[1][data[o + 1]]++; hist[2][data[o + 2]]++; cnt++; }
+  return hist.map(hh => { let acc = 0; for (let v = 0; v < 256; v++) { acc += hh[v]; if (acc >= cnt * 0.97) return v < 40 ? 255 : v; } return 255; });
+}
+function unmix(img, palette) {
+  const { data, width: w, height: h } = img, white = whitePoint(img);
+  const lut = white.map(wc => { const t = new Float32Array(256); for (let v = 0; v < 256; v++) t[v] = -Math.log(Math.min(1, Math.max(FLOOR, v / wc))); return t; });
+  const inkT = INKS[palette].map(ink => ink.map(v => Math.min(1, Math.max(FLOOR, v / 255))));
+  const M = [0, 1, 2].map(c => [0, 1, 2].map(i => -Math.log(inkT[i][c])));
+  const I = inv3(M), coef = new Float32Array(w * h * 3), mask = new Uint8Array(w * h);
+  for (let p = 0, o = 0; p < w * h; p++, o += 4) {
+    const a0 = lut[0][data[o]], a1 = lut[1][data[o + 1]], a2 = lut[2][data[o + 2]];
+    let s = 0;
+    for (let i = 0; i < 3; i++) {
+      let c = I[i][0] * a0 + I[i][1] * a1 + I[i][2] * a2;
+      c = c < 0 ? 0 : c > 1.5 ? 1.5 : c; coef[p * 3 + i] = c; s += c;
+    }
+    mask[p] = s >= 1.5 ? 1 : 0;
+  }
+  return { coef, mask, w, h };
+}
+
+// --- finder search
+function runsOf(arr, n) {
+  const st = [], ln = [], vl = []; let s = 0, cur = arr[0];
+  for (let x = 1; x < n; x++) if (arr[x] !== cur) { st.push(s); ln.push(x - s); vl.push(cur); s = x; cur = arr[x]; }
+  st.push(s); ln.push(n - s); vl.push(cur);
+  return { st, ln, vl };
+}
+function ratioUnit(l0, l1, l2, l3, l4, tol) {
+  const unit = (l0 + l1 + l2 + l3 + l4) / 7;
+  if (unit < 1) return 0;
+  return (Math.abs(l0 - unit) < unit * tol && Math.abs(l1 - unit) < unit * tol && Math.abs(l2 - 3 * unit) < unit * 3 * tol &&
+          Math.abs(l3 - unit) < unit * tol && Math.abs(l4 - unit) < unit * tol) ? unit : 0;
+}
+function checkRuns(r, pos) {
+  let lo = 0, hi = r.st.length - 1;
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (r.st[mid] <= pos) lo = mid; else hi = mid - 1; }
+  const k = lo;
+  if (k < 2 || k + 2 >= r.st.length || r.vl[k] !== 1 || r.vl[k - 2] !== 1) return null;
+  const unit = ratioUnit(r.ln[k - 2], r.ln[k - 1], r.ln[k], r.ln[k + 1], r.ln[k + 2], 0.7);
+  return unit ? [r.st[k] + r.ln[k] / 2, unit] : null;
+}
+function findFinders(mask, w, h) {
+  const clusters = [], colCache = new Map(), rowCache = new Map();
+  const colRuns = x => { let r = colCache.get(x); if (!r) { const c = new Uint8Array(h); for (let y = 0; y < h; y++) c[y] = mask[y * w + x]; r = runsOf(c, h); colCache.set(x, r); } return r; };
+  const rowRuns = y => { let r = rowCache.get(y); if (!r) { r = runsOf(mask.subarray(y * w, y * w + w), w); rowCache.set(y, r); } return r; };
+  for (let y = 0; y < h; y++) {
+    const r = rowRuns(y), n = r.st.length;
+    for (let i = 0; i + 4 < n; i++) {
+      if (r.vl[i] !== 1) continue;
+      const u = ratioUnit(r.ln[i], r.ln[i + 1], r.ln[i + 2], r.ln[i + 3], r.ln[i + 4], 0.7);
+      if (!u) continue;
+      let cx = r.st[i + 2] + r.ln[i + 2] / 2;
+      const v = checkRuns(colRuns(Math.min(w - 1, Math.floor(cx))), y);
+      if (!v) continue;
+      const [cy, uv] = v;
+      if (!(uv / u > 0.5 && uv / u < 2)) continue;
+      const hr = checkRuns(rowRuns(Math.min(h - 1, Math.floor(cy))), Math.floor(cx));
+      if (!hr) continue;
+      cx = hr[0]; const ms = (uv + hr[1]) / 2;
+      let hit = false;
+      for (const c of clusters) {
+        if (Math.abs(c[0] / c[3] - cx) < 3 * ms && Math.abs(c[1] / c[3] - cy) < 3 * ms) { c[0] += cx; c[1] += cy; c[2] += ms; c[3]++; hit = true; break; }
+      }
+      if (!hit) clusters.push([cx, cy, ms, 1]);
+    }
+  }
+  clusters.sort((a, b) => b[3] - a[3]);
+  return clusters.slice(0, 12).map(c => ({ x: c[0] / c[3], y: c[1] / c[3], ms: c[2] / c[3], n: c[3] }));
+}
+function triples(f) {
+  const out = [];
+  for (let i = 0; i < f.length; i++) for (let j = i + 1; j < f.length; j++) for (let k = j + 1; k < f.length; k++) {
+    const pts = [f[i], f[j], f[k]], ms = pts.map(p => p.ms);
+    if (Math.max(...ms) / Math.min(...ms) > 1.6) continue;
+    for (let t = 0; t < 3; t++) {
+      const p = pts[t], a = pts[(t + 1) % 3], b = pts[(t + 2) % 3];
+      const ax = a.x - p.x, ay = a.y - p.y, bx = b.x - p.x, by = b.y - p.y;
+      const la = Math.hypot(ax, ay), lb = Math.hypot(bx, by);
+      if (Math.min(la, lb) < 10 * Math.min(...ms) || Math.max(la, lb) / Math.min(la, lb) > 1.5) continue;
+      const cos = Math.abs(ax * bx + ay * by) / (la * lb);
+      if (cos > 0.4) continue;
+      out.push({ score: pts.reduce((s, q) => s + q.n, 0) - 50 * Math.abs(1 - la / lb) - 50 * cos, tl: p, a, b });
+    }
+  }
+  return out.sort((x, y) => y.score - x.score);
+}
+
+// --- geometry
+function solveHomography(src, dst) {   // 4 point pairs -> 3x3 (row major, h33 = 1)
+  const A = [], b = [];
+  for (let i = 0; i < 4; i++) {
+    const [x, y] = src[i], [u, v] = dst[i];
+    A.push([x, y, 1, 0, 0, 0, -u * x, -u * y]); b.push(u);
+    A.push([0, 0, 0, x, y, 1, -v * x, -v * y]); b.push(v);
+  }
+  for (let c = 0; c < 8; c++) {
+    let piv = c; for (let r = c + 1; r < 8; r++) if (Math.abs(A[r][c]) > Math.abs(A[piv][c])) piv = r;
+    [A[c], A[piv]] = [A[piv], A[c]]; [b[c], b[piv]] = [b[piv], b[c]];
+    if (Math.abs(A[c][c]) < 1e-12) return null;
+    for (let r = c + 1; r < 8; r++) { const f = A[r][c] / A[c][c]; for (let k = c; k < 8; k++) A[r][k] -= f * A[c][k]; b[r] -= f * b[c]; }
+  }
+  const h = new Array(8).fill(0);
+  for (let r = 7; r >= 0; r--) { let s = b[r]; for (let k = r + 1; k < 8; k++) s -= A[r][k] * h[k]; h[r] = s / A[r][r]; }
+  return [h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], 1];
+}
+const applyH = (H, u, v) => { const d = H[6] * u + H[7] * v + H[8]; return [(H[0] * u + H[1] * v + H[2]) / d, (H[3] * u + H[4] * v + H[5]) / d]; };
+
+const ALIGN_OFFS = []; for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+  const c = Math.max(Math.abs(dx), Math.abs(dy)); ALIGN_OFFS.push([dx, dy, c === 1 ? 0 : 1]);
+}
+const SUB4 = [[-0.25, -0.25], [0.25, -0.25], [-0.25, 0.25], [0.25, 0.25]];
+function alignmentCenter(mask, w, h, Haff, size) {
+  const at = (u, v) => {                       // mask value under module-space point (u, v)
+    const [px, py] = applyH(Haff, u, v), xi = Math.floor(px), yi = Math.floor(py);
+    return (xi >= 0 && xi < w && yi >= 0 && yi < h) ? mask[yi * w + xi] : 0;
+  };
+  const coarse = (u, v) => {
+    let dark = 0, light = 0;
+    for (const [dx, dy, isDark] of ALIGN_OFFS) { const val = at(u + dx, v + dy); if (isDark) dark += val; else light += val; }
+    return dark / 17 - light / 8;
+  };
+  const fine = (u, v) => {                     // 4 sub-samples per module: a sharp, unique peak
+    let dark = 0, light = 0;
+    for (const [dx, dy, isDark] of ALIGN_OFFS) for (const [sx, sy] of SUB4) { const val = at(u + dx + sx, v + dy + sy); if (isDark) dark += val; else light += val; }
+    return dark / 68 - light / 32;
+  };
+  const pred = size - 6.5, rad = Math.max(5, 0.07 * size);
+  let best = -2, bu = pred, bv = pred;
+  for (let v = pred - rad; v <= pred + rad; v += 0.5) for (let u = pred - rad; u <= pred + rad; u += 0.5) {
+    const sc = coarse(u, v); if (sc > best) { best = sc; bu = u; bv = v; }
+  }
+  const cu = bu, cv = bv; best = -2;
+  let su = 0, sv = 0, sn = 0;
+  for (let v = cv - 0.75; v <= cv + 0.75; v += 0.125) for (let u = cu - 0.75; u <= cu + 0.75; u += 0.125) {
+    const sc = fine(u, v);
+    if (sc > best + 1e-9) { best = sc; su = u; sv = v; sn = 1; }
+    else if (sc > best - 1e-9) { su += u; sv += v; sn++; }
+  }
+  return best >= 0.55 ? applyH(Haff, su / sn, sv / sn) : null;
+}
+function homographies(mask, w, h, tl, tr, bl, size) {
+  const src3 = [[3.5, 3.5], [size - 3.5, 3.5], [3.5, size - 3.5]];
+  const dst3 = [[tl.x, tl.y], [tr.x, tr.y], [bl.x, bl.y]];
+  const srcAff = src3.concat([[size - 3.5, size - 3.5]]);
+  const dstAff = dst3.concat([[tr.x + bl.x - tl.x, tr.y + bl.y - tl.y]]);
+  const Haff = solveHomography(srcAff, dstAff), out = [];
+  if (!Haff) return out;
+  if (size >= 25) {
+    const c = alignmentCenter(mask, w, h, Haff, size);
+    if (c) { const Hp = solveHomography(src3.concat([[size - 6.5, size - 6.5]]), dst3.concat([c])); if (Hp) out.push(Hp); }
+  }
+  out.push(Haff); return out;
+}
+function sampleModules(coef, w, h, H, size) {
+  const sub = [0.3, 0.5, 0.7], planes = [new Float32Array(size * size), new Float32Array(size * size), new Float32Array(size * size)];
+  for (let my = 0; my < size; my++) for (let mx = 0; mx < size; mx++) {
+    let a0 = 0, a1 = 0, a2 = 0;
+    for (const sy of sub) for (const sx of sub) {
+      const [qx, qy] = applyH(H, mx + sx, my + sy), px = qx - 0.5, py = qy - 0.5;   // pixel i is centred at i + 0.5
+      const x0 = Math.floor(px), y0 = Math.floor(py), fx = px - x0, fy = py - y0;
+      if (x0 < 0 || y0 < 0 || x0 + 1 >= w || y0 + 1 >= h) continue;
+      const o00 = (y0 * w + x0) * 3, o10 = o00 + 3, o01 = o00 + w * 3, o11 = o01 + 3;
+      const w00 = (1 - fx) * (1 - fy), w10 = fx * (1 - fy), w01 = (1 - fx) * fy, w11 = fx * fy;
+      a0 += coef[o00] * w00 + coef[o10] * w10 + coef[o01] * w01 + coef[o11] * w11;
+      a1 += coef[o00 + 1] * w00 + coef[o10 + 1] * w10 + coef[o01 + 1] * w01 + coef[o11 + 1] * w11;
+      a2 += coef[o00 + 2] * w00 + coef[o10 + 2] * w10 + coef[o01 + 2] * w01 + coef[o11 + 2] * w11;
+    }
+    const i = my * size + mx; planes[0][i] = a0 / 9; planes[1][i] = a1 / 9; planes[2][i] = a2 / 9;
+  }
+  return planes;
+}
+function otsu(vals) {
+  const bins = 64, hist = new Float64Array(bins);
+  for (const v of vals) hist[Math.min(bins - 1, Math.max(0, Math.floor(v / 1.5 * bins)))]++;
+  let total = 0, sumAll = 0; for (let i = 0; i < bins; i++) { total += hist[i]; sumAll += hist[i] * (i + 0.5) * 1.5 / bins; }
+  let w0 = 0, s0 = 0, best = -1, thr = 0.5;
+  for (let i = 0; i < bins; i++) {
+    const c = (i + 0.5) * 1.5 / bins; w0 += hist[i]; s0 += hist[i] * c;
+    const w1 = total - w0; if (!w0 || !w1) continue;
+    const m0 = s0 / w0, m1 = (sumAll - s0) / w1, between = w0 * w1 * (m0 - m1) * (m0 - m1);
+    if (between > best) { best = between; thr = c; }
+  }
+  return thr;
+}
+function toPlanes(vals, how) {
+  return vals.map(v => {
+    const t = how === 'fixed' ? 0.5 : Math.min(Math.max(otsu(v), 0.25), 0.9), o = new Uint8Array(v.length);
+    for (let i = 0; i < v.length; i++) o[i] = v[i] > t ? 1 : 0;
+    return o;
+  });
+}
+const versionCandidates = est => {
+  const v0 = (est - 17) / 4, set = new Set();
+  for (const d of [-2, -1, 0, 1, 2]) set.add(Math.min(40, Math.max(1, Math.round(v0) + d)));
+  return [...set].sort((a, b) => Math.abs(a - v0) - Math.abs(b - v0));
+};
+
+function decodePass(prep, blind, notes, finderOut) {
+  const { coef, mask, w, h } = prep;
+  const finders = findFinders(mask, w, h);
+  if (finderOut) finderOut.push(...finders.slice(0, 3));
+  if (finders.length < 3) { notes.push('only ' + finders.length + ' finder pattern(s)'); return null; }
+  const tr3 = triples(finders);
+  if (!tr3.length) { notes.push('no consistent finder triple'); return null; }
+  for (const t of tr3.slice(0, blind ? 1 : 4)) {
+    const { tl, a, b } = t, cross = (a.x - tl.x) * (b.y - tl.y) - (a.y - tl.y) * (b.x - tl.x);
+    const [tr, bl] = cross > 0 ? [a, b] : [b, a];
+    const ms = (tl.ms + tr.ms + bl.ms) / 3;
+    const d = 0.5 * (Math.hypot(tr.x - tl.x, tr.y - tl.y) + Math.hypot(bl.x - tl.x, bl.y - tl.y));
+    for (const ver of versionCandidates(d / ms + 7).slice(0, blind ? 1 : 5)) {
+      const size = sizeOf(ver);
+      for (const H of homographies(mask, w, h, tl, tr, bl, size)) {
+        const vals = sampleModules(coef, w, h, H, size);
+        for (const how of ['fixed', 'otsu']) {
+          try {
+            const sym = decodePlanes(toPlanes(vals, how), size, blind);
+            sym.info = { modulepx: ms, threshold: how, blind, corners: [tl, tr, bl].map(p => ({ x: p.x, y: p.y })), homography: H };
+            return sym;
+          } catch (e) { if (!(e instanceof DecodeError)) throw e; notes.push('v' + ver + ' ' + how + ': ' + e.message); }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/** Scan RGBA image data. Returns {symbol|null, finders:[{x,y,ms}], notes}. */
+function scanImageData(img, opts = {}) {
+  const notes = [], finders = [], palettes = opts.palette ? [opts.palette] : ['ideal', 'print'];
+  const blindPass = opts.blind !== false;
+  for (const blind of blindPass ? [false, true] : [false]) {
+    for (const pal of palettes) {
+      const prep = unmix(img, pal);
+      const sym = decodePass(prep, blind, notes, blind ? null : (finders.length ? null : finders));
+      if (sym) { sym.info.palette = pal; return { symbol: sym, finders, notes }; }
+    }
+  }
+  return { symbol: null, finders, notes };
+}
+/** Fast check used by the live loop: finder triple only, no decode. */
+function locate(img, palette = 'ideal') {
+  const prep = unmix(img, palette), f = findFinders(prep.mask, prep.w, prep.h);
+  return { finders: f.slice(0, 3), triple: triples(f).length > 0 };
+}
+
+/** Assemble structured-append symbols -> {text, raw, parityOk} or throws. */
+function assembleStructured(symbols) {
+  const sa = symbols.filter(s => s.structuredAppend);
+  if (!sa.length) throw new DecodeError('no structured-append symbols');
+  const [, total, parity] = sa[0].structuredAppend;
+  const byIdx = new Map();
+  for (const s of sa) { if (s.structuredAppend[1] !== total || s.structuredAppend[2] !== parity) throw new DecodeError('symbols belong to different sets'); if (!byIdx.has(s.structuredAppend[0])) byIdx.set(s.structuredAppend[0], s); }
+  const missing = []; for (let i = 0; i < total; i++) if (!byIdx.has(i)) missing.push(i);
+  if (missing.length) throw new DecodeError('missing parts: ' + missing.map(i => i + 1).join(', '));
+  const ordered = []; for (let i = 0; i < total; i++) ordered.push(byIdx.get(i));
+  const raw = []; let p = 0, pieces = [];
+  for (const s of ordered) { for (const v of s.raw) { raw.push(v); p ^= v; } pieces = pieces.concat(s.pieces); }
+  return { text: renderText(pieces), raw: Uint8Array.from(raw), parityOk: p === parity };
+}
+
+return { scanImageData, locate, decodePlanes, assembleStructured, DecodeError, sizeOf, numDataCodewords, FORMAT_XOR,
+  _debug: { unmix, findFinders, triples, homographies, sampleModules, toPlanes, applyH } };
+})();
+if (typeof module !== 'undefined') module.exports = CMYQR;
+
+</script>
+<script>
+(() => {
+'use strict';
+const $ = id => document.getElementById(id);
+const el = { stage: $('stage'), video: $('video'), photo: $('photo'), overlay: $('overlay'), hint: $('hint'), status: $('status'),
+  liveBtn: $('liveBtn'), result: $('result'), outText: $('outText'), binNote: $('binNote'), binLen: $('binLen'), copyBtn: $('copyBtn'),
+  openLink: $('openLink'), meta: $('meta'), symCanvas: $('symCanvas'), parts: $('parts'), partsRow: $('partsRow'), partsNote: $('partsNote') };
+const work = document.createElement('canvas'), wctx = work.getContext('2d', { willReadFrequently: true });
+let stream = null, live = false, busy = false, frame = 0, timer = 0;
+let sa = { map: new Map(), total: 0, parity: -1 };
+
+function setStatus(msg, kind) { el.status.textContent = msg; el.status.className = 'status' + (kind ? ' ' + kind : ''); }
+const nextPaint = () => new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
+
+// ---- drawing the source into the work canvas (scaled) and reading pixels
+function toImageData(source, sw, sh, maxSide) {
+  const s = Math.min(1, maxSide / Math.max(sw, sh));
+  work.width = Math.max(1, Math.round(sw * s)); work.height = Math.max(1, Math.round(sh * s));
+  wctx.drawImage(source, 0, 0, work.width, work.height);
+  return wctx.getImageData(0, 0, work.width, work.height);
+}
+function drawFinders(finders, w, h) {
+  const o = el.overlay; o.hidden = false; o.width = w; o.height = h;
+  const g = o.getContext('2d'); g.clearRect(0, 0, w, h);
+  const cols = ['#00AEEF', '#EC008C', '#FFD400'];
+  finders.forEach((f, i) => {
+    const r = Math.max(8, f.ms * 4.2);
+    g.lineWidth = Math.max(3, w / 220); g.strokeStyle = cols[i % 3];
+    g.strokeRect(f.x - r, f.y - r, r * 2, r * 2);
+  });
+}
+function clearOverlay() { const o = el.overlay; o.getContext('2d').clearRect(0, 0, o.width, o.height); o.hidden = true; }
+
+// ---- result rendering
+const isUrl = t => /^https?:\/\/[^\s]+$/i.test(t.trim());
+function looksBinary(sym) {
+  if (sym.text.includes('\uFFFD')) return true;
+  let bad = 0; for (const ch of sym.text) { const c = ch.codePointAt(0); if (c < 32 && c !== 10 && c !== 13 && c !== 9 && c !== 29) bad++; }
+  return bad > 0;
+}
+function hexDump(raw) {
+  const lines = []; const n = Math.min(raw.length, 512);
+  for (let i = 0; i < n; i += 16) lines.push(Array.from(raw.slice(i, i + 16), b => b.toString(16).padStart(2, '0')).join(' '));
+  if (raw.length > n) lines.push('… ' + (raw.length - n) + ' more bytes');
+  return lines.join('\n');
+}
+const MODE_NAMES = { 1: 'numeric', 2: 'alphanumeric', 3: 'structured append', 4: 'byte', 5: 'FNC1 (first)', 7: 'ECI', 8: 'kanji', 9: 'FNC1 (second)' };
+function drawSymbol(sym) {
+  const n = sym.size, k = Math.max(2, Math.min(6, Math.floor(168 / n)));
+  const c = el.symCanvas; c.width = n * k; c.height = n * k; c.style.width = c.width + 'px';
+  const g = c.getContext('2d'), img = g.createImageData(n * k, n * k);
+  const rgb = [[0, 255, 255], [255, 0, 255], [255, 255, 0]];
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+    let col = [255, 255, 255];
+    for (let p = 0; p < 3; p++) if (sym.planes[p][y * n + x]) col = col.map((v, i) => v * rgb[p][i] / 255);
+    for (let dy = 0; dy < k; dy++) for (let dx = 0; dx < k; dx++) { const o = (((y * k + dy) * n * k) + x * k + dx) * 4; img.data[o] = col[0]; img.data[o + 1] = col[1]; img.data[o + 2] = col[2]; img.data[o + 3] = 255; }
+  }
+  g.putImageData(img, 0, 0);
+}
+function addMeta(rows) {
+  el.meta.textContent = '';
+  for (const [k, v] of rows) {
+    const dt = document.createElement('dt'), dd = document.createElement('dd'); dt.textContent = k;
+    if (v instanceof Node) dd.appendChild(v); else dd.textContent = v;
+    el.meta.append(dt, dd);
+  }
+}
+function showResult(text, raw, sym, extra) {
+  const bin = extra && extra.forceText ? false : looksBinary({ text });
+  el.binNote.hidden = !bin; el.binLen.textContent = raw.length;
+  el.outText.textContent = bin ? hexDump(raw) : text;
+  const link = !bin && isUrl(text);
+  el.openLink.hidden = !link; if (link) el.openLink.href = text.trim();
+  const dots = document.createElement('span'); dots.className = 'dots';
+  [['C', '#00AEEF'], ['M', '#EC008C'], ['Y', '#FFD400']].forEach(([n, c], i) => { const b = document.createElement('b'); b.style.setProperty('--c', c); b.textContent = n + ' ' + sym.corrected[i]; dots.appendChild(b); });
+  const modes = [...new Set(sym.modes.map(m => MODE_NAMES[m] || String(m)))].join(', ');
+  const rows = [['Version', `${sym.version} (${sym.size}×${sym.size})`], ['Error correction', sym.ecl], ['Codewords repaired', dots], ['Data modes', modes], ['Bytes', String(raw.length)]];
+  if (sym.eci.length) rows.push(['Character set', 'ECI ' + sym.eci.join(', ')]);
+  if (sym.fnc1) rows.push(['GS1', Array.isArray(sym.fnc1) ? 'FNC1, indicator ' + sym.fnc1[1] : 'FNC1']);
+  if (sym.mirrored) rows.push(['Orientation', 'mirrored']);
+  if (sym.info && sym.info.blind) rows.push(['Format info', 'damaged, recovered by trial']);
+  if (extra && extra.note) rows.push(['Note', extra.note]);
+  addMeta(rows); drawSymbol(sym);
+  el.result.hidden = false; el.result.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  try { navigator.vibrate && navigator.vibrate(25); } catch (e) { /* optional */ }
+}
+function renderParts() {
+  el.parts.hidden = sa.total === 0; el.partsRow.textContent = '';
+  for (let i = 0; i < sa.total; i++) { const b = document.createElement('i'); b.textContent = i + 1; if (sa.map.has(i)) b.className = 'have'; el.partsRow.appendChild(b); }
+  const left = []; for (let i = 0; i < sa.total; i++) if (!sa.map.has(i)) left.push(i + 1);
+  el.partsNote.textContent = left.length ? `Scan part ${left.join(', ')} next. Order does not matter.` : 'All parts scanned.';
+}
+function resetParts() { sa = { map: new Map(), total: 0, parity: -1 }; renderParts(); }
+$('partsReset').addEventListener('click', () => { resetParts(); el.result.hidden = true; setStatus('Ready to scan.'); });
+
+function onSymbol(sym) {
+  if (sym.structuredAppend) {
+    const [i, total, parity] = sym.structuredAppend;
+    if (sa.total && (sa.total !== total || sa.parity !== parity)) resetParts();
+    sa.total = total; sa.parity = parity; sa.map.set(i, sym);
+    renderParts();
+    if (sa.map.size < total) { el.result.hidden = true; setStatus(`Part ${i + 1} of ${total} read. ${total - sa.map.size} to go.`); return; }
+    try {
+      const a = CMYQR.assembleStructured([...sa.map.values()]);
+      setStatus(`All ${total} parts read.`);
+      showResult(a.text, a.raw, sym, { note: a.parityOk ? `${total} symbols joined, parity matches` : `${total} symbols joined, parity mismatch`, forceText: false });
+    } catch (e) { setStatus(e.message, 'err'); }
+    return;
+  }
+  setStatus('Decoded.'); showResult(sym.text, sym.raw, sym);
+}
+
+// ---- still images (photo / file / sample)
+async function scanSource(source, sw, sh, label) {
+  stopLive();
+  setStatus(label || 'Reading image…', 'busy'); el.result.hidden = true;
+  const p = el.photo; p.hidden = false; el.hint.hidden = true; el.video.hidden = true;
+  await nextPaint();
+  const t0 = performance.now();
+  let img;
+  try { img = toImageData(source, sw, sh, 2000); } catch (e) { setStatus('That image could not be read.', 'err'); return; }
+  p.width = work.width; p.height = work.height; p.getContext('2d').drawImage(work, 0, 0);
+  await nextPaint();
+  let r;
+  try { r = CMYQR.scanImageData(img); } catch (e) { setStatus('Something went wrong while decoding: ' + e.message, 'err'); return; }
+  const ms = Math.round(performance.now() - t0);
+  if (r.symbol) { clearOverlay(); onSymbol(r.symbol); }
+  else {
+    drawFinders(r.finders, work.width, work.height);
+    setStatus(r.finders.length >= 3
+      ? 'Found the corners but could not read the data. Move closer, avoid glare and shadow, and keep the colours true.'
+      : 'No CMYQR symbol found. Fill the frame with the symbol, keep it flat and evenly lit.', 'err');
+  }
+}
+async function fromFile(file) {
+  if (!file) return;
+  try {
+    let bmp;
+    if (window.createImageBitmap) bmp = await createImageBitmap(file);
+    else bmp = await new Promise((ok, no) => { const im = new Image(); im.onload = () => ok(im); im.onerror = no; im.src = URL.createObjectURL(file); });
+    await scanSource(bmp, bmp.width, bmp.height);
+  } catch (e) { setStatus('That file is not an image this browser can open.', 'err'); }
+}
+for (const id of ['fileCam', 'filePick']) $(id).addEventListener('change', ev => { const f = ev.target.files[0]; ev.target.value = ''; fromFile(f); });
+$('sampleBtn').addEventListener('click', () => { const im = $('sampleImg'); scanSource(im, im.naturalWidth, im.naturalHeight, 'Reading sample…'); });
+
+// ---- live camera
+function stopLive() {
+  live = false; clearTimeout(timer);
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  el.video.hidden = true; el.video.srcObject = null; el.liveBtn.textContent = 'Live camera';
+}
+async function startLive() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { setStatus('Live camera is not available in this view. Use Take photo instead.', 'err'); return; }
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+  } catch (e) {
+    stream = null;
+    const n = e && e.name;
+    if (n === 'NotFoundError' || n === 'OverconstrainedError') setStatus('No camera was found on this device. Use Take photo or Choose image.', 'err');
+    else if (n === 'NotAllowedError' || n === 'SecurityError') setStatus('Camera access is blocked here. Use Take photo instead, or open this page over https in your own browser for live scanning.', 'err');
+    else setStatus('The camera could not start' + (n ? ' (' + n + ')' : '') + '. Use Take photo instead.', 'err');
+    return;
+  }
+  el.video.srcObject = stream; await el.video.play().catch(() => {});
+  el.video.hidden = false; el.photo.hidden = true; el.hint.hidden = true; el.result.hidden = true; clearOverlay();
+  live = true; frame = 0; el.liveBtn.textContent = 'Stop camera'; setStatus('Looking for a symbol…', 'busy');
+  loop();
+}
+function loop() {
+  if (!live) return;
+  const v = el.video;
+  if (v.readyState >= 2 && v.videoWidth && !busy) {
+    busy = true; frame++;
+    try {
+      const img = toImageData(v, v.videoWidth, v.videoHeight, 1024);
+      const r = CMYQR.scanImageData(img, { palette: frame % 2 ? 'ideal' : 'print', blind: frame % 5 === 0 });
+      if (r.symbol) { clearOverlay(); const sym = r.symbol; stopLive(); onSymbol(sym); busy = false; return; }
+      if (r.finders.length) { drawFinders(r.finders, work.width, work.height); setStatus(r.finders.length >= 3 ? 'Found the corners. Hold steady…' : 'Looking for a symbol…', 'busy'); }
+      else { clearOverlay(); setStatus('Looking for a symbol…', 'busy'); }
+    } catch (e) { /* keep scanning */ }
+    busy = false;
+  }
+  timer = setTimeout(loop, 90);
+}
+el.liveBtn.addEventListener('click', () => { if (live) { stopLive(); setStatus('Camera stopped.'); } else startLive(); });
+
+// ---- copy
+el.copyBtn.addEventListener('click', async () => {
+  const text = el.outText.textContent;
+  try { await navigator.clipboard.writeText(text); setStatus('Copied.'); }
+  catch (e) {
+    const r = document.createRange(); r.selectNodeContents(el.outText); const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+    setStatus('Text selected. Use your device’s copy command.');
+  }
+});
+window.CMYQR_UI = { scanSource };
+})();
+</script>
+</body>
+</html>
